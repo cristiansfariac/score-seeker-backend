@@ -1,4 +1,4 @@
-// server.js with login attempts and lockout
+// server.js with password validation
 
 const express = require('express');
 const bcrypt = require('bcrypt');
@@ -15,62 +15,61 @@ const verifiedUsers = {};
 app.post('/register', async (req, res) => {
     try {
         const { email, password } = req.body;
+
+        // --- NEW: Password Strength Validation ---
+        const passwordRegex = /^(?=.*[A-Za-z])(?=.*\d)(?=.*[@$!%*#?&])[A-Za-z\d@$!%*#?&]{8,}$/;
+        if (!passwordRegex.test(password)) {
+            return res.status(400).send('Password must be at least 8 characters long and contain at least one letter, one number, and one special character.');
+        }
+        // --- END of New Validation ---
+
         if (verifiedUsers[email]) {
             return res.status(400).send('This email is already registered and verified.');
         }
+
         const salt = await bcrypt.genSalt(10);
         const hashedPassword = await bcrypt.hash(password, salt);
         const verificationCode = Math.floor(100000 + Math.random() * 900000).toString();
         
-        // Add attempts and lockUntil fields for the new user
         unverifiedUsers[email] = { 
             password: hashedPassword, 
             code: verificationCode,
             timestamp: Date.now(),
-            attempts: 0, // <-- NEW
-            lockUntil: null // <-- NEW
+            attempts: 0,
+            lockUntil: null
         };
 
         await sendVerificationEmail(email, verificationCode);
         res.status(200).send('Verification code sent! Check your terminal for the preview link.');
+
     } catch (error) {
         console.error(error);
         res.status(500).send('Error during registration.');
     }
 });
 
-// UPDATED /verify endpoint with new logic
 app.post('/verify', (req, res) => {
     const { email, code } = req.body;
     const userData = unverifiedUsers[email];
-
-    // 1. Check if user data exists
     if (!userData) {
         return res.status(400).send('Invalid email or verification code.');
     }
-
-    // 2. Check if the account is currently locked
     if (userData.lockUntil && userData.lockUntil > Date.now()) {
         const remainingTime = Math.ceil((userData.lockUntil - Date.now()) / 60000);
         return res.status(429).send(`Account is locked. Please try again in ${remainingTime} minutes.`);
     }
-
-    // 3. Check if the code is correct
     if (userData.code === code) {
-        // On success, reset attempts and move user
         userData.attempts = 0;
         userData.lockUntil = null;
         verifiedUsers[email] = { password: userData.password };
         delete unverifiedUsers[email];
         res.status(200).send('Account successfully verified! Redirecting...');
     } else {
-        // 4. On failure, increment attempts
         userData.attempts += 1;
         if (userData.attempts >= 3) {
-            // Lock the account for 30 minutes
             const lockDuration = 30 * 60 * 1000;
             userData.lockUntil = Date.now() + lockDuration;
-            userData.attempts = 0; // Reset attempts after locking
+            userData.attempts = 0;
             return res.status(429).send('Too many failed attempts. Your account has been locked for 30 minutes.');
         }
         res.status(400).send(`Invalid code. You have ${3 - userData.attempts} attempts remaining.`);
