@@ -1,12 +1,12 @@
-// server.js with CORS fix
+// server.js with login attempts and lockout
 
 const express = require('express');
 const bcrypt = require('bcrypt');
 const nodemailer = require('nodemailer');
-const cors = require('cors'); // REQUIRES 'cors' package
+const cors = require('cors');
 
 const app = express();
-app.use(cors()); // USES 'cors' middleware
+app.use(cors());
 app.use(express.json());
 
 const unverifiedUsers = {}; 
@@ -21,11 +21,16 @@ app.post('/register', async (req, res) => {
         const salt = await bcrypt.genSalt(10);
         const hashedPassword = await bcrypt.hash(password, salt);
         const verificationCode = Math.floor(100000 + Math.random() * 900000).toString();
+        
+        // Add attempts and lockUntil fields for the new user
         unverifiedUsers[email] = { 
             password: hashedPassword, 
             code: verificationCode,
-            timestamp: Date.now()
+            timestamp: Date.now(),
+            attempts: 0, // <-- NEW
+            lockUntil: null // <-- NEW
         };
+
         await sendVerificationEmail(email, verificationCode);
         res.status(200).send('Verification code sent! Check your terminal for the preview link.');
     } catch (error) {
@@ -34,20 +39,41 @@ app.post('/register', async (req, res) => {
     }
 });
 
+// UPDATED /verify endpoint with new logic
 app.post('/verify', (req, res) => {
     const { email, code } = req.body;
     const userData = unverifiedUsers[email];
-    if (userData && userData.code === code) {
-        const fifteenMinutes = 15 * 60 * 1000;
-        if (Date.now() - userData.timestamp > fifteenMinutes) {
-            delete unverifiedUsers[email];
-            return res.status(400).send('Verification code has expired. Please register again.');
-        }
+
+    // 1. Check if user data exists
+    if (!userData) {
+        return res.status(400).send('Invalid email or verification code.');
+    }
+
+    // 2. Check if the account is currently locked
+    if (userData.lockUntil && userData.lockUntil > Date.now()) {
+        const remainingTime = Math.ceil((userData.lockUntil - Date.now()) / 60000);
+        return res.status(429).send(`Account is locked. Please try again in ${remainingTime} minutes.`);
+    }
+
+    // 3. Check if the code is correct
+    if (userData.code === code) {
+        // On success, reset attempts and move user
+        userData.attempts = 0;
+        userData.lockUntil = null;
         verifiedUsers[email] = { password: userData.password };
         delete unverifiedUsers[email];
-        res.status(200).send('Account successfully verified! You can now log in.');
+        res.status(200).send('Account successfully verified! Redirecting...');
     } else {
-        res.status(400).send('Invalid email or verification code.');
+        // 4. On failure, increment attempts
+        userData.attempts += 1;
+        if (userData.attempts >= 3) {
+            // Lock the account for 30 minutes
+            const lockDuration = 30 * 60 * 1000;
+            userData.lockUntil = Date.now() + lockDuration;
+            userData.attempts = 0; // Reset attempts after locking
+            return res.status(429).send('Too many failed attempts. Your account has been locked for 30 minutes.');
+        }
+        res.status(400).send(`Invalid code. You have ${3 - userData.attempts} attempts remaining.`);
     }
 });
 
@@ -57,18 +83,15 @@ async function sendVerificationEmail(email, code) {
         port: 587,
         secure: false,
         auth: {
-            user: 'jany.fadel22@ethereal.email', // ❗️ Replace with your Ethereal username
-            pass: 'Zp2GgNtAvS91datQWh'         // ❗️ Replace with your Ethereal password
+            user: 'jany.fadel22@ethereal.email',
+            pass: 'Zp2GgNtAvS91datQWh'
         }
     });
     let info = await transporter.sendMail({
-        from: '"Score Seeker" <no-reply@scoreseeker.com>',
-        to: email,
-        subject: "Your Verification Code",
-        text: `Welcome to Score Seeker! Your one-time verification code is: ${code}`,
-        html: `<b>Welcome to Score Seeker!</b><p>Your one-time verification code is: <h2>${code}</h2></p>`
+        from: '"Score Seeker" <no-reply@scoreseeker.com>', to: email, subject: "Your Verification Code",
+        text: `Your one-time verification code is: ${code}`,
+        html: `<b>Your one-time verification code is: <h2>${code}</h2></b>`
     });
-    console.log("Message sent: %s", info.messageId);
     console.log("Preview URL: %s", nodemailer.getTestMessageUrl(info));
 }
 
