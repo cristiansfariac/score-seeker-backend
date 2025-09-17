@@ -57,8 +57,8 @@ async function sendVerificationEmail(email, code) {
         port: 587,
         secure: false,
         auth: {
-            user: 'UNIQUE_ETHEREAL_USER@ethereal.email', // ❗️ Replace with your Ethereal username
-            pass: 'UNIQUE_ETHEREAL_PASSWORD'         // ❗️ Replace with your Ethereal password
+            user: 'jany.fadel22@ethereal.email', // ❗️ Replace with your Ethereal username
+            pass: 'Zp2GgNtAvS91datQWh'         // ❗️ Replace with your Ethereal password
         }
     });
     let info = await transporter.sendMail({
